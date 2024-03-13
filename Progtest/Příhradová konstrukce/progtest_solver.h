@@ -37,24 +37,24 @@
  */
 class CProgtestSolver
 {
-public:
-  virtual ~CProgtestSolver() noexcept = default;
-  /**
-   * Check the used capacity of the solver. Returns true if the used capacity is smaller than the limit.
-   * @return true = there is a free space (capacity not fully used yet), false = no free capacity
-   */
-  virtual bool hasFreeCapacity() const = 0;
-  /**
-   * Add a new polygon instance to be solved.
-   * @param[in] p                    the polygon to add
-   * @return true = problem added, false = problem not added (already at the capacity)
-   */
-  virtual bool addPolygon(APolygon p) = 0;
-  /**
-   * Solve the problems previously stored into the solver.
-   * @return the number of problems solved. Typically, 0 indicates an error (solve already called for the instance).
-   */
-  virtual size_t solve() = 0;
+  public:
+    virtual                            ~CProgtestSolver                        () noexcept = default;
+    /**
+     * Check the used capacity of the solver. Returns true if the used capacity is smaller than the limit.
+     * @return true = there is a free space (capacity not fully used yet), false = no free capacity
+     */
+    virtual bool                       hasFreeCapacity                         () const = 0;
+    /**
+     * Add a new polygon instance to be solved.
+     * @param[in] p                    the polygon to add
+     * @return true = problem added, false = problem not added (already at the capacity)
+     */
+    virtual bool                       addPolygon                              ( APolygon                              p ) = 0;
+    /**
+     * Solve the problems previously stored into the solver.
+     * @return the number of problems solved. Typically, 0 indicates an error (solve already called for the instance).
+     */
+    virtual size_t                     solve                                   () = 0;
 };
 using AProgtestSolver = std::shared_ptr<CProgtestSolver>;
 //=============================================================================================================================================================
@@ -65,6 +65,6 @@ using AProgtestSolver = std::shared_ptr<CProgtestSolver>;
  * This limit applies to the solver in the attached library only. The solvers in the Progtest testing environment
  * use different limits, the limits are set with respect to the size of input data used for the tests.
  */
-AProgtestSolver createProgtestMinSolver();
-AProgtestSolver createProgtestCntSolver();
+AProgtestSolver                        createProgtestMinSolver                 ();
+AProgtestSolver                        createProgtestCntSolver                 ();
 #endif /* PROGTEST_SOLVER_H_9523464567576456 */
