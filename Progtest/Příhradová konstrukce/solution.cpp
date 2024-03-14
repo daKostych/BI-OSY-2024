@@ -102,7 +102,7 @@ public:
 private:
     mutex mtx_UnsolvedQueue, mtx_SolvedPacks, mtx_MinSolver, mtx_CntSolver;
     condition_variable cv_EmptyUnsolvedQueue, cv_EmptySolvedPacks;
-    unsigned int unsolvedFirms = 0, threadCnt = 0;
+    unsigned int unsolvedFirms = 0 /*, threadCnt = 0*/;
     vector<Company> companyList;
     queue<shared_ptr<ProblemPack>> unsolvedQueue;
     vector<queue<shared_ptr<ProblemPack>>> solvedPacks;
@@ -117,14 +117,45 @@ private:
 
 void COptimizer::start(int threadCount)
 {
+    // threadCnt = threadCount;
+    for (size_t i = 0; i < companyList.size(); i++)
+    {
+        receivingThreads.emplace_back(&COptimizer::receive, this, i, threadCount);
+        handoverThreads.emplace_back(&COptimizer::send, this);
+    }
+
+    for (int i = 0; i < threadCount; i++)
+        workingThreads.emplace_back(&COptimizer::solve, this, i);
 }
 
 void COptimizer::stop()
 {
+    for (auto &t : receivingThreads)
+        t.join();
+
+    for (auto &t : workingThreads)
+        t.join();
+
+    for (auto &t : handoverThreads)
+        t.join();
 }
 
 void COptimizer::addCompany(ACompany company)
 {
+    mtx_UnsolvedQueue.lock();
+    mtx_SolvedPacks.lock();
+
+    if (solvedPacks.size() == solvedPacks.capacity())
+        solvedPacks.resize((solvedPacks.capacity() ^ 2) + 10);
+
+    unsolvedFirms++;
+    if (companyList.empty())
+        companyList.emplace_back(company, 0);
+    else
+        companyList.emplace_back(company, companyList.back().companyID + 1);
+
+    mtx_UnsolvedQueue.unlock();
+    mtx_SolvedPacks.unlock();
 }
 
 void COptimizer::receive(size_t companyID, int threadCnt)
