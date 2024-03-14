@@ -267,6 +267,131 @@ void COptimizer::send(size_t  companyID)
 
 void COptimizer::solve(int tid)
 {
+    vector<shared_ptr<ProblemPack>> problems;
+
+    while(true)
+    {
+        unique_lock<mutex> lock_UnsolvedQueue(mtx_UnsolvedQueue);
+
+        cv_EmptyUnsolvedQueue.wait(lock_UnsolvedQueue, [&]()
+                                   { return !unsolvedQueue.empty(); });
+
+        shared_ptr<ProblemPack> toSolve = unsolvedQueue.front();
+        unsolvedQueue.pop();
+
+        lock_UnsolvedQueue.unlock();
+
+        if (toSolve->threadStop)
+        {
+            if (toSolve->stopSignal == 0)
+            {
+                mtx_MinSolver.lock();
+                mtx_CntSolver.lock();
+
+                minSolver->solve();
+                cntSolver->solve();
+
+                mtx_MinSolver.unlock();
+                mtx_CntSolver.unlock();
+            }
+
+            if (problems.empty())
+                break;
+
+            else
+            {
+                mtx_MinSolver.lock();
+                mtx_CntSolver.lock();
+                unique_lock<mutex> lock_SolvedPacks(mtx_SolvedPacks);
+                while (!problems.empty())
+                {
+                    problems[0]->solvedMin = true;
+                    problems[0]->solvedCnt = true;
+                    cout << "Work thread number " << tid << ": Send solved pack number " << problems[0]->problemID << endl;
+                    solvedPacks[problems[0]->companyID].push(problems[0]);
+                    cv_EmptySolvedPacks.notify_all();
+                    problems.erase(problems.begin());
+                }
+                lock_SolvedPacks.unlock();
+                mtx_MinSolver.unlock();
+                mtx_CntSolver.unlock();
+                break;
+            }
+        }
+
+        if (toSolve->firmLastProblem)
+        {
+            unique_lock<mutex> lock_SolvedPacks(mtx_SolvedPacks);
+            cout << "Work thread number " << tid << ": Send last solved pack of the company " << toSolve->problemID << endl;
+            solvedPacks[toSolve->companyID].push(toSolve);
+            cv_EmptySolvedPacks.notify_all();
+            continue;
+        }
+
+        problems.emplace_back(toSolve);
+
+        for (size_t i = 0; i < toSolve->problemPack->m_ProblemsMin.size(); i++)
+        {
+            unique_lock<mutex> lock_MinSolver(mtx_MinSolver);
+            if (minSolver->hasFreeCapacity())
+            {
+                if (i == toSolve->problemPack->m_ProblemsMin.size() - 1)
+                    addToMinSolver.emplace_back(toSolve);
+                minSolver->addPolygon(toSolve->problemPack->m_ProblemsMin[i]);
+            }
+            else
+            {
+                AProgtestSolver copyMinSolver = minSolver;
+                minSolver = createProgtestMinSolver();
+                vector<shared_ptr<ProblemPack>> copyAddToMinSolver = addToMinSolver;
+                addToMinSolver.clear();
+                lock_MinSolver.unlock();
+
+                copyMinSolver->solve();
+                for(size_t j = 0; j < copyAddToMinSolver.size(); j++)
+                    copyAddToMinSolver[j]->solvedMin = true;
+                i--;
+            }
+        }
+
+        for (size_t i = 0; i < toSolve->problemPack->m_ProblemsCnt.size(); i++)
+        {
+            unique_lock<mutex> lock_CntSolver(mtx_CntSolver);
+            if (cntSolver->hasFreeCapacity())
+            {
+                if (i == toSolve->problemPack->m_ProblemsCnt.size() - 1)
+                    addToCntSolver.emplace_back(toSolve);
+                cntSolver->addPolygon(toSolve->problemPack->m_ProblemsCnt[i]);
+            }
+            else
+            {
+                AProgtestSolver copyCntSolver = cntSolver;
+                cntSolver = createProgtestMinSolver();
+                vector<shared_ptr<ProblemPack>> copyAddToCntSolver = addToCntSolver;
+                addToCntSolver.clear();
+                lock_CntSolver.unlock();
+
+                copyCntSolver->solve();
+                for(size_t j = 0; j < copyAddToCntSolver.size(); j++)
+                    copyAddToCntSolver[j]->solvedCnt = true;
+                i--;
+            }
+        }
+
+        unique_lock<mutex> lock_SolvedPacks(mtx_SolvedPacks);
+        for (size_t j = 0; j < problems.size(); j++)
+        {
+            if (problems[j]->solvedMin && problems[j]->solvedCnt)
+            {
+                cout << "Work thread number " << tid << ": Send solved pack number " << problems[j]->problemID << endl;
+                solvedPacks[problems[j]->companyID].push(problems[j]);
+                cv_EmptySolvedPacks.notify_all();
+                problems.erase(problems.begin() + ((int)j));
+                j--;
+            }
+        }
+        lock_SolvedPacks.unlock();
+    }
 }
 // TODO: COptimizer implementation goes here
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -276,7 +401,7 @@ int main(void)
   COptimizer optimizer;
   ACompanyTest company = std::make_shared<CCompanyTest>();
   optimizer.addCompany(company);
-  optimizer.start(4);
+  optimizer.start(1);
   optimizer.stop();
   if (!company->allProcessed())
     throw std::logic_error("(some) problems were not correctly processsed");
