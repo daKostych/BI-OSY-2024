@@ -73,7 +73,7 @@ struct ProblemPack
 
 struct ProblemComparator
 {
-    bool operator()(const ProblemPack &p1, const ProblemPack &p2) { return p1.problemID > p2.problemID; };
+    bool operator()(const shared_ptr<ProblemPack>& p1, const shared_ptr<ProblemPack>& p2) { return p1->problemID > p2->problemID; };
 };
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -82,7 +82,7 @@ class COptimizer
 public:
     void receive(size_t companyID, int threadCnt);
     void solve(int tid);
-    void send();
+    void send(size_t companyID);
 
 
     static bool usingProgtestSolver(void)
@@ -123,7 +123,7 @@ void COptimizer::start(int threadCount)
     for (size_t i = 0; i < companyList.size(); i++)
     {
         receivingThreads.emplace_back(&COptimizer::receive, this, i, threadCount);
-        handoverThreads.emplace_back(&COptimizer::send, this);
+        handoverThreads.emplace_back(&COptimizer::send, this, i);
     }
 
     for (int i = 0; i < threadCount; i++)
@@ -172,7 +172,7 @@ void COptimizer::receive(size_t companyID, int threadCnt)
             newProblem = make_shared<ProblemPack>(problem, companyList[companyID].companyID, i);
             mtx_UnsolvedQueue.lock();
 
-            cout << "Add problem number: " << newProblem->problemID << endl;
+            cout << "Receiving thread: Add problem number " << newProblem->problemID << endl;
             unsolvedQueue.push(newProblem);
             cv_EmptyUnsolvedQueue.notify_one();
 
@@ -184,7 +184,7 @@ void COptimizer::receive(size_t companyID, int threadCnt)
             newProblem->firmLastProblem = true;
             mtx_UnsolvedQueue.lock();
 
-            cout << "Add the last problem of the firm to unsolved Queue" << endl;
+            cout << "Receiving thread: Add the last problem of the firm to unsolved Queue" << endl;
             unsolvedQueue.push(newProblem);
             // cv_EmptyUnsolvedQueue.notify_one();
             if(unsolvedFirms == 1)
@@ -193,7 +193,7 @@ void COptimizer::receive(size_t companyID, int threadCnt)
                 for (int j = 0; j < threadCnt; j++)
                 {
                     workerStop->stopSignal = j;
-                    cout << "Add stop signal to work thread number: " << j << endl;
+                    cout << "Receiving thread: Add stop signal to work thread number " << j << endl;
                     unsolvedQueue.push(workerStop);
                     // cv_EmptyUnsolvedQueue.notify_one();
                 }
@@ -207,8 +207,62 @@ void COptimizer::receive(size_t companyID, int threadCnt)
     }
 }
 
-void COptimizer::send()
+void COptimizer::send(size_t  companyID)
 {
+    unsigned int sendNow = 0, max = UINT_MAX;
+    priority_queue<shared_ptr<ProblemPack>, vector<shared_ptr<ProblemPack>>, ProblemComparator> q;
+
+    while(true)
+    {
+        if(sendNow == max)
+            break;
+
+        unique_lock<mutex> lock(mtx_SolvedPacks);
+
+        cv_EmptySolvedPacks.wait(lock, [&]()
+                                { return !(solvedPacks[companyID].empty()); });
+
+        if(solvedPacks[companyID].empty())
+        {
+            lock.unlock();
+            continue;
+        }
+
+        shared_ptr<ProblemPack> solvedPack = solvedPacks[companyID].front();
+        cout << "Handover thread: Get pack number " << solvedPack->problemID << endl;
+        solvedPacks[companyID].pop();
+
+        lock.unlock();
+
+        if(solvedPack->firmLastProblem)
+            max = solvedPack->problemID;
+
+        if(solvedPack->problemID == sendNow)
+        {
+            if(solvedPack->problemID < max)
+            {
+                cout << "Handover thread: Send back pack number " << solvedPack->problemID << " of " << max - 1 << endl;
+                companyList[companyID].company->solvedPack(solvedPack->problemPack);
+                sendNow++;
+
+                while ((!q.empty()) && (sendNow == q.top()->problemID))
+                {
+                    if (q.top()->problemID == max)
+                    {
+                        cout << "Handover thread: Sent all packs of the firm" << endl;
+                        q.pop();
+                        break;
+                    }
+                    cout << "Handover thread: Send back pack number: " << q.top()->problemID << " of " << max - 1 << endl;
+                    companyList[companyID].company->solvedPack(q.top()->problemPack);
+                    sendNow++;
+                    q.pop();
+                }
+            }
+        }
+        else
+            q.push(solvedPack);
+    }
 }
 
 void COptimizer::solve(int tid)
