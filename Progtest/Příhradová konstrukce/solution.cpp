@@ -54,9 +54,11 @@ struct ProblemPack
     ProblemPack(AProblemPack p, unsigned int cid, unsigned int pid)
         : problemPack(std::move(p)), companyID(cid), problemID(pid){};
     ProblemPack(unsigned int cid, unsigned int pid)
-        : companyID(cid), problemID(pid) {}
+        : companyID(cid), problemID(pid) {};
+    explicit ProblemPack(bool stop)
+        : threadStop(stop) {};
 
-    AProblemPack problemPack;
+    AProblemPack problemPack = nullptr;
     unsigned int companyID = 0;
     unsigned int problemID = 0;
     unsigned int stopSignal = 0;
@@ -160,6 +162,49 @@ void COptimizer::addCompany(ACompany company)
 
 void COptimizer::receive(size_t companyID, int threadCnt)
 {
+    for (unsigned int i = 0; ; i++)
+    {
+        AProblemPack problem = companyList[companyID].company->waitForPack();
+        shared_ptr<ProblemPack> newProblem;
+
+        if(problem.get() != nullptr)
+        {
+            newProblem = make_shared<ProblemPack>(problem, companyList[companyID].companyID, i);
+            mtx_UnsolvedQueue.lock();
+
+            cout << "Add problem number: " << newProblem->problemID << endl;
+            unsolvedQueue.push(newProblem);
+            cv_EmptyUnsolvedQueue.notify_one();
+
+            mtx_UnsolvedQueue.unlock();
+        }
+        else
+        {
+            newProblem = make_shared<ProblemPack>(companyList[companyID].companyID, i);
+            newProblem->firmLastProblem = true;
+            mtx_UnsolvedQueue.lock();
+
+            cout << "Add the last problem of the firm to unsolved Queue" << endl;
+            unsolvedQueue.push(newProblem);
+            // cv_EmptyUnsolvedQueue.notify_one();
+            if(unsolvedFirms == 1)
+            {
+                shared_ptr<ProblemPack> workerStop = make_shared<ProblemPack>(true);
+                for (int j = 0; j < threadCnt; j++)
+                {
+                    workerStop->stopSignal = j;
+                    cout << "Add stop signal to work thread number: " << j << endl;
+                    unsolvedQueue.push(workerStop);
+                    // cv_EmptyUnsolvedQueue.notify_one();
+                }
+            }
+            unsolvedFirms--;
+            cv_EmptyUnsolvedQueue.notify_all();
+
+            mtx_UnsolvedQueue.unlock();
+            break;
+        }
+    }
 }
 
 void COptimizer::send()
