@@ -50,13 +50,12 @@ struct Company
 
 struct ProblemPack
 {
-    // ProblemPack() = default;
     ProblemPack(AProblemPack p, unsigned int cid, unsigned int pid)
         : problemPack(std::move(p)), companyID(cid), problemID(pid){};
     ProblemPack(unsigned int cid, unsigned int pid)
         : companyID(cid), problemID(pid) {};
     explicit ProblemPack(bool stop)
-        : threadStop(stop) {};
+        : threadStop(stop) { stopSignal = 0; };
 
     AProblemPack problemPack = nullptr;
     unsigned int companyID = 0;
@@ -66,9 +65,6 @@ struct ProblemPack
     bool threadStop = false;
     bool solvedMin = false;
     bool solvedCnt = false;
-
-    // bool addToMinSolver = false;
-    // bool addToCntSolver = false;
 };
 
 struct ProblemComparator
@@ -84,7 +80,6 @@ public:
     void solve(int tid);
     void send(size_t companyID);
 
-
     static bool usingProgtestSolver(void)
     {
       return true;
@@ -97,6 +92,7 @@ public:
     {
       // dummy implementation if usingProgtestSolver() returns true
     }
+
     void start(int threadCount);
     void stop();
     void addCompany(ACompany company);
@@ -104,7 +100,7 @@ public:
 private:
     mutex mtx_UnsolvedQueue, mtx_SolvedPacks, mtx_MinSolver, mtx_CntSolver;
     condition_variable cv_EmptyUnsolvedQueue, cv_EmptySolvedPacks;
-    unsigned int unsolvedFirms = 0 /*, threadCnt = 0*/;
+    unsigned int unsolvedFirms = 0, threadCnt = 0;
     vector<Company> companyList;
     queue<shared_ptr<ProblemPack>> unsolvedQueue;
     vector<queue<shared_ptr<ProblemPack>>> solvedPacks;
@@ -119,7 +115,7 @@ private:
 
 void COptimizer::start(int threadCount)
 {
-    // threadCnt = threadCount;
+    threadCnt = threadCount;
     for (size_t i = 0; i < companyList.size(); i++)
     {
         receivingThreads.emplace_back(&COptimizer::receive, this, i, threadCount);
@@ -132,6 +128,7 @@ void COptimizer::start(int threadCount)
 
 void COptimizer::stop()
 {
+
     for (auto &t : receivingThreads)
         t.join();
 
@@ -140,6 +137,7 @@ void COptimizer::stop()
 
     for (auto &t : handoverThreads)
         t.join();
+
 }
 
 void COptimizer::addCompany(ACompany company)
@@ -172,7 +170,7 @@ void COptimizer::receive(size_t companyID, int threadCnt)
             newProblem = make_shared<ProblemPack>(problem, companyList[companyID].companyID, i);
             mtx_UnsolvedQueue.lock();
 
-            cout << "Receiving thread: Add problem number " << newProblem->problemID << endl;
+            //cout << "Receiving thread: Add problem number " << newProblem->problemID << endl;
             unsolvedQueue.push(newProblem);
             cv_EmptyUnsolvedQueue.notify_one();
 
@@ -180,22 +178,21 @@ void COptimizer::receive(size_t companyID, int threadCnt)
         }
         else
         {
-            newProblem = make_shared<ProblemPack>(companyList[companyID].companyID, i);
-            newProblem->firmLastProblem = true;
+            shared_ptr<ProblemPack> firmEnd = make_shared<ProblemPack>(companyList[companyID].companyID, i);
+            firmEnd->firmLastProblem = true;
             mtx_UnsolvedQueue.lock();
 
-            cout << "Receiving thread: Add the last problem of the firm to unsolved Queue" << endl;
-            unsolvedQueue.push(newProblem);
-            // cv_EmptyUnsolvedQueue.notify_one();
+            //cout << "Receiving thread: Add the last problem of the firm to unsolved Queue" << endl;
+            unsolvedQueue.push(firmEnd);
+
             if(unsolvedFirms == 1)
             {
-                shared_ptr<ProblemPack> workerStop = make_shared<ProblemPack>(true);
                 for (int j = 0; j < threadCnt; j++)
                 {
+                    shared_ptr<ProblemPack> workerStop = make_shared<ProblemPack>(true);
                     workerStop->stopSignal = j;
-                    cout << "Receiving thread: Add stop signal to work thread number " << j << endl;
+                    //cout << "Receiving thread: Add stop signal to work thread number " << j << endl;
                     unsolvedQueue.push(workerStop);
-                    // cv_EmptyUnsolvedQueue.notify_one();
                 }
             }
             unsolvedFirms--;
@@ -229,7 +226,7 @@ void COptimizer::send(size_t  companyID)
         }
 
         shared_ptr<ProblemPack> solvedPack = solvedPacks[companyID].front();
-        cout << "Handover thread: Get pack number " << solvedPack->problemID << endl;
+        //cout << "Handover thread: Get pack number " << solvedPack->problemID << endl;
         solvedPacks[companyID].pop();
 
         lock.unlock();
@@ -241,7 +238,7 @@ void COptimizer::send(size_t  companyID)
         {
             if(solvedPack->problemID < max)
             {
-                cout << "Handover thread: Send back pack number " << solvedPack->problemID << " of " << max - 1 << endl;
+                //cout << "Handover thread: Send back pack number " << solvedPack->problemID << " of " << max - 1 << endl;
                 companyList[companyID].company->solvedPack(solvedPack->problemPack);
                 sendNow++;
 
@@ -249,11 +246,11 @@ void COptimizer::send(size_t  companyID)
                 {
                     if (q.top()->problemID == max)
                     {
-                        cout << "Handover thread: Sent all packs of the firm" << endl;
+                        //cout << "Handover thread: Sent all packs of the firm" << endl;
                         q.pop();
                         break;
                     }
-                    cout << "Handover thread: Send back pack number: " << q.top()->problemID << " of " << max - 1 << endl;
+                    //cout << "Handover thread: Send back pack number: " << q.top()->problemID << " of " << max - 1 << endl;
                     companyList[companyID].company->solvedPack(q.top()->problemPack);
                     sendNow++;
                     q.pop();
@@ -283,13 +280,20 @@ void COptimizer::solve(int tid)
 
         if (toSolve->threadStop)
         {
-            if (toSolve->stopSignal == 0)
+            //cout << "Working thread number " << tid << ": Get pack with stop signal number " << toSolve->stopSignal << endl;
+            if (toSolve->stopSignal == threadCnt - 1)
             {
                 mtx_MinSolver.lock();
                 mtx_CntSolver.lock();
 
+                //cout << "Work thread number: " << tid << " Start last solve process" << endl;
                 minSolver->solve();
                 cntSolver->solve();
+
+                for(auto & j : addToMinSolver)
+                    j->solvedMin = true;
+                for(auto & j : addToCntSolver)
+                    j->solvedCnt = true;
 
                 mtx_MinSolver.unlock();
                 mtx_CntSolver.unlock();
@@ -300,21 +304,17 @@ void COptimizer::solve(int tid)
 
             else
             {
-                mtx_MinSolver.lock();
-                mtx_CntSolver.lock();
-                unique_lock<mutex> lock_SolvedPacks(mtx_SolvedPacks);
                 while (!problems.empty())
                 {
-                    problems[0]->solvedMin = true;
-                    problems[0]->solvedCnt = true;
-                    cout << "Work thread number " << tid << ": Send solved pack number " << problems[0]->problemID << endl;
+                    unique_lock<mutex> lock_SolvedPacks(mtx_SolvedPacks);
+                    if(problems[0]->solvedMin && problems[0]->solvedCnt)
+                    {
+                    //cout << "Work thread number " << tid << ": Send solved pack number " << problems[0]->problemID << endl;
                     solvedPacks[problems[0]->companyID].push(problems[0]);
                     cv_EmptySolvedPacks.notify_all();
                     problems.erase(problems.begin());
+                    }
                 }
-                lock_SolvedPacks.unlock();
-                mtx_MinSolver.unlock();
-                mtx_CntSolver.unlock();
                 break;
             }
         }
@@ -322,7 +322,7 @@ void COptimizer::solve(int tid)
         if (toSolve->firmLastProblem)
         {
             unique_lock<mutex> lock_SolvedPacks(mtx_SolvedPacks);
-            cout << "Work thread number " << tid << ": Send last solved pack of the company " << toSolve->problemID << endl;
+            //cout << "Work thread number " << tid << ": Send last solved pack of the company " << toSolve->problemID << endl;
             solvedPacks[toSolve->companyID].push(toSolve);
             cv_EmptySolvedPacks.notify_all();
             continue;
@@ -330,6 +330,11 @@ void COptimizer::solve(int tid)
 
         problems.emplace_back(toSolve);
 
+        if(toSolve->problemPack->m_ProblemsMin.empty())
+        {
+            unique_lock<mutex> lock_MinSolver(mtx_MinSolver);
+            addToMinSolver.emplace_back(toSolve);
+        }
         for (size_t i = 0; i < toSolve->problemPack->m_ProblemsMin.size(); i++)
         {
             unique_lock<mutex> lock_MinSolver(mtx_MinSolver);
@@ -338,22 +343,26 @@ void COptimizer::solve(int tid)
                 if (i == toSolve->problemPack->m_ProblemsMin.size() - 1)
                     addToMinSolver.emplace_back(toSolve);
                 minSolver->addPolygon(toSolve->problemPack->m_ProblemsMin[i]);
-            }
-            else
-            {
-                AProgtestSolver copyMinSolver = minSolver;
-                minSolver = createProgtestMinSolver();
-                vector<shared_ptr<ProblemPack>> copyAddToMinSolver = addToMinSolver;
-                addToMinSolver.clear();
-                lock_MinSolver.unlock();
+                if(!minSolver->hasFreeCapacity())
+                {
+                    AProgtestSolver copyMinSolver = minSolver;
+                    minSolver = createProgtestMinSolver();
+                    vector<shared_ptr<ProblemPack>> copyAddToMinSolver = addToMinSolver;
+                    addToMinSolver.clear();
+                    lock_MinSolver.unlock();
 
-                copyMinSolver->solve();
-                for(size_t j = 0; j < copyAddToMinSolver.size(); j++)
-                    copyAddToMinSolver[j]->solvedMin = true;
-                i--;
+                    copyMinSolver->solve();
+                    for(auto & j : copyAddToMinSolver)
+                        j->solvedMin = true;
+                }
             }
         }
 
+        if(toSolve->problemPack->m_ProblemsCnt.empty())
+        {
+            unique_lock<mutex> lock_CntSolver(mtx_CntSolver);
+            addToCntSolver.emplace_back(toSolve);
+        }
         for (size_t i = 0; i < toSolve->problemPack->m_ProblemsCnt.size(); i++)
         {
             unique_lock<mutex> lock_CntSolver(mtx_CntSolver);
@@ -362,19 +371,18 @@ void COptimizer::solve(int tid)
                 if (i == toSolve->problemPack->m_ProblemsCnt.size() - 1)
                     addToCntSolver.emplace_back(toSolve);
                 cntSolver->addPolygon(toSolve->problemPack->m_ProblemsCnt[i]);
-            }
-            else
-            {
-                AProgtestSolver copyCntSolver = cntSolver;
-                cntSolver = createProgtestMinSolver();
-                vector<shared_ptr<ProblemPack>> copyAddToCntSolver = addToCntSolver;
-                addToCntSolver.clear();
-                lock_CntSolver.unlock();
+                if (!cntSolver->hasFreeCapacity())
+                {
+                    AProgtestSolver copyCntSolver = cntSolver;
+                    cntSolver = createProgtestCntSolver();
+                    vector<shared_ptr<ProblemPack>> copyAddToCntSolver = addToCntSolver;
+                    addToCntSolver.clear();
+                    lock_CntSolver.unlock();
 
-                copyCntSolver->solve();
-                for(size_t j = 0; j < copyAddToCntSolver.size(); j++)
-                    copyAddToCntSolver[j]->solvedCnt = true;
-                i--;
+                    copyCntSolver->solve();
+                    for(auto & j : copyAddToCntSolver)
+                        j->solvedCnt = true;
+                }
             }
         }
 
@@ -383,13 +391,13 @@ void COptimizer::solve(int tid)
         {
             if (problems[j]->solvedMin && problems[j]->solvedCnt)
             {
-                cout << "Work thread number " << tid << ": Send solved pack number " << problems[j]->problemID << endl;
+                //cout << "Work thread number " << tid << ": Send solved pack number " << problems[j]->problemID << endl;
                 solvedPacks[problems[j]->companyID].push(problems[j]);
-                cv_EmptySolvedPacks.notify_all();
                 problems.erase(problems.begin() + ((int)j));
                 j--;
             }
         }
+        cv_EmptySolvedPacks.notify_all();
         lock_SolvedPacks.unlock();
     }
 }
@@ -401,7 +409,7 @@ int main(void)
   COptimizer optimizer;
   ACompanyTest company = std::make_shared<CCompanyTest>();
   optimizer.addCompany(company);
-  optimizer.start(1);
+  optimizer.start(4);
   optimizer.stop();
   if (!company->allProcessed())
     throw std::logic_error("(some) problems were not correctly processsed");
